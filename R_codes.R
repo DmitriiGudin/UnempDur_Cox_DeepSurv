@@ -293,3 +293,215 @@ M1 <- coxph(Surv(spell, C) ~ I3 + T1 + Y1 + Y2 + Y3 + J + Z2, data=UnempDur)
 
 
 # Now fit the M2 model without the last exponential term. M2f and M2p are the fits for the full-time and the part-time employed individuals.
+
+UnempDur_FullTime <- subset(UnempDur, censor2==0)
+UnempDur_PartTime <- subset(UnempDur, censor1==0)
+
+nf = length(UnempDur_FullTime$spell)
+np = length(UnempDur_PartTime$spell)
+
+M2f <- coxph(Surv(spell, C) ~ I1 + I2 + I3 + I4 + I5 + I6 + T1 + T2 + T3 + T4 + T5 + Y1 + Y2 + Y3 + Y4 + Y5, data=UnempDur_FullTime) 
+M2p <- coxph(Surv(spell, C) ~ I1 + I2 + I3 + I4 + I5 + I6 + T1 + T2 + T3 + T4 + T5 + Y1 + Y2 + Y3 + Y4 + Y5, data=UnempDur_PartTime) 
+
+# Apply the AIC to simplify the model.
+
+library(MASS)
+M2f <- stepAIC(M2f) # Only I1, I2, I3, I4, I5, Y1, Y2, Y3, Y4 left.
+M2p <- stepAIC(M2p) # Only I1, I2, I3 left.
+
+
+
+
+# Determine the cutoff points for eligible rates. Then spawn variables Z1f, Z2f, Z1p and Z2p respectively.
+
+UnempDur_FullTime$C = integer(nf)
+for (i in 1:nf)
+{
+	if (UnempDur_FullTime$censor1[i] == 1 | UnempDur_FullTime$censor2[i] == 1)
+	{
+		UnempDur_FullTime$C[i] = 1
+	}
+}
+UnempDur_PartTime$C = integer(np)
+for (i in 1:np)
+{
+	if (UnempDur_PartTime$censor1[i] == 1 | UnempDur_PartTime$censor2[i] == 1)
+	{
+		UnempDur_PartTime$C[i] = 1
+	}
+}
+
+UnempDur_FullTime$Z1 = UnempDur_FullTime$reprate 
+UnempDur_FullTime$Z2 = UnempDur_FullTime$disrate 
+UnempDur_PartTime$Z1 = UnempDur_PartTime$reprate 
+UnempDur_PartTime$Z2 = UnempDur_PartTime$disrate 
+
+library(survminer)
+surv_cutpoint(data=UnempDur_FullTime, time='spell', event='C', variables=c('Z1','Z2'))# 0.304 and 0.028 
+UnempDur_FullTime$Z1 = integer(nf)
+for (i in 1:nf)
+{
+	if (UnempDur_FullTime$reprate[i]>=0.304)
+	{
+		UnempDur_FullTime$Z1[i] = 1
+	}
+}
+UnempDur_FullTime$Z2 = integer(nf)
+for (i in 1:nf)
+{
+	if (UnempDur_FullTime$disrate[i]>=0.028)
+	{
+		UnempDur_FullTime$Z2[i] = 1
+	}
+}
+
+library(survminer)
+surv_cutpoint(data=UnempDur_PartTime, time='spell', event='C', variables=c('Z1','Z2'))# 0.499 and 0.179 
+UnempDur_PartTime$Z1 = integer(np)
+for (i in 1:np)
+{
+	if (UnempDur_PartTime$reprate[i]>=0.304)
+	{
+		UnempDur_PartTime$Z1[i] = 1
+	}
+}
+UnempDur_PartTime$Z2 = integer(np)
+for (i in 1:np)
+{
+	if (UnempDur_PartTime$disrate[i]>=0.028)
+	{
+		UnempDur_PartTime$Z2[i] = 1
+	}
+}
+
+# Refit the full M2f and M2p models.
+M2f <- coxph(Surv(spell, C) ~ I1 + I2 + I3 + I4 + I5 + Y1 + Y2 + Y3 + Y4 + Z1 + Z2, data=UnempDur_FullTime)
+M2p <- coxph(Surv(spell, C) ~ I1 + I2 + I3 + Z1 + Z2, data=UnempDur_PartTime)
+# In M2f, Z1 is statistically insignificant. In M2p, both Z1 and Z2 are statistically insignificant.
+M2f <- coxph(Surv(spell, C) ~ I1 + I2 + I3 + I4 + I5 + Y1 + Y2 + Y3 + Y4 + Z2, data=UnempDur_FullTime)
+M2p <- coxph(Surv(spell, C) ~ I1 + I2 + I3, data=UnempDur_PartTime)
+
+
+
+
+# Prepare the data for the DeepSurv model.
+data(UnempDur)
+
+n = length(UnempDur$spell)
+UnempDur$status = integer(n)
+for (i in 1:n)
+{
+	if (UnempDur$censor1[i] == 1 | UnempDur$censor2[i] == 1)
+	{
+		UnempDur$status[i] = 1
+	}
+}
+UnempDur$J = integer(n)
+for (i in 1:n)
+{
+	if (UnempDur$censor1[i] == 1)
+	{
+		UnempDur$J[i] = 1
+	}
+}
+UnempDur <- UnempDur[, c(13,6,7,8,9,10,11,1,12)]
+names(UnempDur)[names(UnempDur) == 'spell'] <- 'time'
+
+# Make the 'ui' variable binary.
+temp_ui = integer(n)
+for (i in 1:n)
+{
+	if (UnempDur$ui[i]=='yes')
+	{
+		temp_ui[i] = 1
+	}
+}
+UnempDur$ui = temp_ui
+
+# Train the DeepSurv model; a separate file (DeepSurv_params.R) lists some (but far from all) of the attempted sets of parameters and subsets of the data and their respective concordance indices.
+library(survivalmodels)
+model <- deepsurv(data=UnempDur, num_nodes=c(32L,16L,8L), activation='relu', dropout=0.2, epochs = 200L, batch_size = 256L, verbose=TRUE)
+# Calculate the concordance index.
+p <- predict(model, type='risk')
+cindex(risk=p, truth = UnempDur[, 'time'])
+# C = 0.6426914
+
+
+# Try the same with the set of variables defined as for the model M1. After all the variables were defined, do the following:
+UnempDur <- UnempDur[, c(12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,30,31,1,29)]
+names(UnempDur)[names(UnempDur) == 'spell'] <- 'time'
+names(UnempDur)[names(UnempDur) == 'C'] <- 'status'
+# Try to fit the model again and calculate the concordance index.
+model <- deepsurv(data=UnempDur, num_nodes=c(32L,16L,8L), activation='relu', dropout=0.2, epochs = 200L, batch_size = 256L, verbose=TRUE)
+p <- predict(model, type='risk')
+cindex(risk=p, truth = UnempDur[, 'time'])
+# C = 0.5984144. Now it is even worse. :(
+
+
+# The last attempt is to drop all the variables except for those left out in the M1 model.
+UnempDur <- UnempDur[, c(3,7,12,13,14,17,19,20,21)]
+model <- deepsurv(data=UnempDur, num_nodes=c(32L,16L,8L), activation='relu', dropout=0.2, epochs = 200L, batch_size = 256L, verbose=TRUE)
+p <- predict(model, type='risk')
+cindex(risk=p, truth = UnempDur[, 'time'])
+
+
+
+# Now we have our models selected. Let's build the two datasets M1_data and MD_data and get the models M1 and MD. To run this, do everything we did before in order to define the variables for M1. Then:
+
+set_seed(20)
+temp_ui = integer(n)
+for (i in 1:n)
+{
+	if (UnempDur$ui[i]=='yes')
+	{
+		temp_ui[i] = 1
+	}
+}
+UnempDur$ui = temp_ui
+MD_data <- UnempDur[, c(6,7,8,9,10,11,28,1,29)]
+names(MD_data)[names(MD_data) == 'spell'] <- 'time'
+names(MD_data)[names(MD_data) == 'C'] <- 'status'
+MD <- deepsurv(data=MD_data, num_nodes=c(32L,16L,8L), activation='relu', dropout=0.2, epochs = 200L, batch_size = 256L, verbose=TRUE)
+p <- predict(MD, type='risk')
+cindex(risk=p, truth = MD_data[, 'time'])
+# C = 0.6441852
+
+M1 <- coxph(Surv(spell, C) ~ I3 + T1 + Y1 + Y2 + Y3 + J + Z2, data=UnempDur)
+M1_data <- UnempDur[, c(14,18,23,24,25,28,31,1,29)]
+names(M1_data)[names(M1_data) == 'spell'] <- 'time'
+names(M1_data)[names(M1_data) == 'C'] <- 'status'
+
+
+
+
+# Time to compare and analyze the models! First, let's compare the baseline survival functions.
+library(survival)
+par(mfrow=c(1,2))
+
+# Non-scaled survival function.
+t = c(c(0),basehaz(M1)[,2])
+S_M1 = c(c(1),exp(-basehaz(M1)[,1]))
+S_MD = c(c(1),exp(-as.vector(MD$model$baseline_cumulative_hazards_)))
+plot(t,c(c(0),rep(1,length(t)-1)),col='white',xlab='Unemployment duration (2-week periods)',ylab='Survival function', xlim=c(0,max(t)), ylim=c(0,1))
+lines(t, S_M1, col='red')
+lines(t, S_MD, col='blue')
+legend(x = "topright", legend = c("Cox", "DeepSurv"), lty = c(1, 1), col = c('red', 'blue'))
+
+# Scaled survival function.
+t = c(c(0),basehaz(M1)[,2])
+scale_factor = mean(basehaz(M1)[,1])/mean(as.vector(MD$model$baseline_cumulative_hazards_))
+MD_cumhaz = MD$model$baseline_cumulative_hazards_ * scale_factor
+S_M1 = c(c(1),exp(-basehaz(M1)[,1]))
+S_MD = c(c(1),exp(-as.vector(MD_cumhaz)))
+plot(t,c(c(0),rep(1,length(t)-1)),col='white',xlab='Unemployment duration (2-week periods)',ylab='Survival function', xlim=c(0,max(t)), ylim=c(0,1))
+lines(t, S_M1, col='red')
+lines(t, S_MD, col='blue')
+
+# Linear fit. 
+fit <- lm (rowMeans(cbind(S_M1,S_MD)) ~ t)
+abline(fit, col='black', lty=3)
+legend(x = "topright", legend = c("Cox", "DeepSurv (scaled)", "Linear fit"), lty = c(1, 1, 3), col = c('red', 'blue', 'black'))
+
+# Look at the result of the fit.
+summary(fit)
+# Both $p$-values are <2e-16, and the AdjustedR-squared is 0.9917.
